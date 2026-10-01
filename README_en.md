@@ -1,119 +1,178 @@
-# Auto.js And Autox.js
+"auto";
+auto.waitFor();
+if (!requestScreenCapture()) { toast("Screen capture permission do"); exit(); }
+setScreenMetrics(1080, 2400);
 
-[中文文档](README.md)
+var GAME_NAME = "Freezer Frenzy";
+var GAME_PKG = getPackageName(GAME_NAME);
+if (!GAME_PKG) { toast("Game nahi mila. GAME_NAME check kar"); exit(); }
 
-## Introduction
+var W = 1080;
+var SCAN_FROM = 480, SCAN_TO = 1700;
+var STEP = 24;
+var SAFE = 230;
+var OBST = [228, 45, 0], OBST_TOL = 38, OBST_MIN = 12;
+var ROPE = [192, 129, 16], ROPE_TOL = 30;
+var ROPE_Y = 1150;
+var DRAG_Y = 2000;
+var HOME_TAP = [540, 1350];
+var POPUP_WAIT = 12000;
+var CLOSE_TAPS = [[540, 1790], [540, 1880]];
 
-- **This version integrates the Autobot API into the original autox.js, supporting non-accessibility screen projection automation, while preserving code commit history.**
+events.observeKey();
+events.onKeyDown("volume_down", function () {
+    toast("Bot stop");
+    engines.myEngine().forceStop();
+});
 
-- Autobot non-accessibility screen projection automation: [https://automan-bot.github.io/autobot_doc/#/zh-cn/](https://automan-bot.github.io/autobot_doc/#/zh-cn/)
-- Documentation for Autox.js integrated with Autobot API: [https://automan-bot.github.io/autojs/#/autoxApi](https://automan-bot.github.io/autojs/#/autoxApi)
+function log(m) { console.log("[FreezerBot] " + m); }
 
-### The following is the original introduction (some documentation links have been replaced with community links and the download address of this project):
+function near(c, t, tol) {
+    var dr = colors.red(c) - t[0], dg = colors.green(c) - t[1], db = colors.blue(c) - t[2];
+    return dr * dr + dg * dg + db * db < tol * tol;
+}
 
-A JavaScript runtime and development environment for the Android platform that supports Accessibility Service. Its goal is to be similar to JsBox and Workflow.
+function getState(img) {
+    var c = images.pixel(img, 100, 1900);
+    var r = colors.red(c), g = colors.green(c), b = colors.blue(c);
+    if (r < 100 && g < 100 && b < 115) return "popup";
+    if (r > 225 && g > 150 && b < 140) return "home";
+    if (b > 190 && g > 170 && r < 235) return "game";
+    return "other";
+}
 
-This project is derived from [hyb1996](https://github.com/hyb1996/Auto.js) (note: the original repository is no longer accessible) and renamed to Autox.js (a modified version of autojs).  
-You are now viewing a project based on the original 4.1 version.  
-We will later introduce how to develop and run this project, and welcome more developers to participate in its maintenance and upgrade.  
-The original [hyb1996](https://github.com/hyb1996/Auto.js) version used the [Mozilla Public License Version 2.0](https://github.com/hyb1996/NoRootScriptDroid/blob/master/LICENSE.md)  
-+**Non-commercial use**. For various reasons, this product adopts the [GPL-V2](https://opensource.org/licenses/GPL-2.0) license.  
-Both contributors and users must comply with the requirements of MPL-2.0 + non-commercial use and GPL-V2.
+function getHookX(img, last) {
+    var xs = [];
+    for (var x = 20; x < 1060; x += 3) {
+        if (near(images.pixel(img, x, ROPE_Y), ROPE, ROPE_TOL)) xs.push(x);
+    }
+    if (!xs.length) return last;
+    return xs[Math.floor(xs.length / 2)];
+}
 
-About the two licenses:
+function getObstacleXs(img) {
+    var xs = [];
+    for (var y = SCAN_FROM; y < SCAN_TO; y += STEP) {
+        for (var x = 0; x < W; x += STEP) {
+            if (near(images.pixel(img, x, y), OBST, OBST_TOL)) xs.push(x);
+        }
+    }
+    return xs.length >= OBST_MIN ? xs : [];
+}
 
-* GPL-V2: [https://opensource.org/licenses/GPL-2.0](https://opensource.org/license/gpl-2-0/)
-* MPL-2: [https://www.mozilla.org/MPL/2.0](https://www.mozilla.org/MPL/2.0)
+function pickTarget(hx, xs) {
+    function minDist(x) {
+        var m = 1e9;
+        for (var i = 0; i < xs.length; i++) m = Math.min(m, Math.abs(xs[i] - x));
+        return m;
+    }
+    if (minDist(hx) >= SAFE) return hx;
+    var best = null, bd = 1e9, x;
+    for (x = 150; x <= 930; x += 30) {
+        if (minDist(x) >= SAFE && Math.abs(x - hx) < bd) { best = x; bd = Math.abs(x - hx); }
+    }
+    if (best !== null) return best;
+    var bx = hx, bm = -1;
+    for (x = 150; x <= 930; x += 30) {
+        var m = minDist(x);
+        if (m > bm) { bm = m; bx = x; }
+    }
+    return bx;
+}
 
-### Current Autox.js:
+function dragTo(hx, tx) {
+    var d = Math.abs(tx - hx);
+    if (d < 40) return;
+    gesture(Math.min(400, 120 + d * 0.4), [hx, DRAG_Y], [tx, DRAG_Y]);
+}
 
-* Documentation: [https://autox-community.github.io/AutoX_Docs/](https://autox-community.github.io/AutoX_Docs/)
-* Community open-source repository: https://github.com/autox-community/AutoX
-* Community home: [https://github.com/autox-community](https://github.com/autox-community)
+function tryAdClose() {
+    var w = textMatches(/^(X|x|\u00d7|\u2715|\u2716|Close|CLOSE|close|Skip|SKIP|Skip Ad|Skip ad)$/).findOnce() ||
+            descMatches(/^(Close|close|CLOSE|Skip|X|Dismiss)$/).findOnce();
+    if (w) {
+        var b = w.bounds();
+        click(b.centerX(), b.centerY());
+        log("Ad close mila, click kiya");
+        return true;
+    }
+    return false;
+}
 
-### Download Autox.js:
-[https://github.com/automan-bot/AutoX/releases](https://github.com/automan-bot/AutoX/releases)  
-If download speed is slow, right-click the APK file link in Release Assets, copy the address, and paste it into a GitHub acceleration site such as [http://toolwa.com/github/](http://toolwa.com/github/).
+function relaunch() {
+    log("Game relaunch");
+    app.launchPackage(GAME_PKG);
+    sleep(4000);
+}
 
-#### APK Version Info:
-- **universal:** Universal version (recommended for general use, includes both CPU architectures below)
-- **armeabi-v7a:** 32-bit ARM devices (ideal for older phones)
-- **arm64-v8a:** 64-bit ARM devices (mainstream flagship models)
+var lastX = 540, popupSince = 0, otherSince = 0, lastBack = 0, closeIdx = 0;
 
-### Features
+while (true) {
+    try {
+        var now = Date.now();
+        var pkg = currentPackage();
 
-- **Important: Integrated Autobot API, supporting non-accessibility screen projection automation**
+        if (pkg && pkg !== GAME_PKG && pkg.indexOf("launcher") < 0 && pkg.indexOf("systemui") < 0) {
+            if (otherSince === 0) otherSince = now;
+            if (!tryAdClose()) {
+                if (now - lastBack > 8000) { back(); lastBack = now; log("back()"); }
+            }
+            if (now - otherSince > 100000) { relaunch(); otherSince = 0; }
+            sleep(1500);
+            continue;
+        }
 
-1. Simple and easy-to-use automation functions based on Accessibility Service
-2. Floating window recording and playback
-3. A more powerful selector API for finding, traversing, retrieving, and interacting with UI elements, similar to Google’s UiAutomator framework — can also serve as a mobile UI testing framework
-4. Uses JavaScript as the scripting language, with features like code completion, variable renaming, code formatting, and search & replace — can serve as a JavaScript IDE
-5. Supports building GUIs with e4x, and packaging JavaScript into APKs for tool app development
-6. Supports Root operations for enhanced screen interaction (clicks, swipes, recording) and shell commands; recorded actions can be saved as JS or binary files for smooth replay
-7. Provides functions for screen capture, image saving, color and image recognition
-8. Can be used as a Tasker plugin to automate daily workflows
-9. Includes a layout inspector tool similar to Android Studio’s Layout Inspector for UI hierarchy analysis
+        var img = captureScreen();
+        if (!img) { sleep(300); continue; }
+        var st = getState(img);
 
-#### Notes for Code Contributors:
+        if (st === "game") {
+            popupSince = 0; otherSince = 0;
+            var hx = getHookX(img, lastX);
+            lastX = hx;
+            var xs = getObstacleXs(img);
+            img.recycle();
+            if (xs.length) {
+                var tx = pickTarget(hx, xs);
+                dragTo(hx, tx);
+            }
+            sleep(40);
 
-If the original file does not declare a license, it is considered under MPL 2.0.  
-New or modified files (only your own code) should use GPL-V2 and include an appropriate declaration.
+        } else if (st === "home") {
+            img.recycle();
+            popupSince = 0; otherSince = 0;
+            log("Home: TAP TO DROP");
+            click(HOME_TAP[0], HOME_TAP[1]);
+            sleep(1800);
 
-#### For Developers Extending Autox.js:
+        } else if (st === "popup") {
+            img.recycle();
+            otherSince = 0;
+            if (popupSince === 0) { popupSince = now; log("Popup, wait..."); }
+            var el = now - popupSince;
+            if (el < POPUP_WAIT) {
+                sleep(500);
+            } else {
+                var p = CLOSE_TAPS[closeIdx % CLOSE_TAPS.length];
+                closeIdx++;
+                click(p[0], p[1]);
+                sleep(1500);
+                if (el > 120000) { back(); popupSince = now; }
+            }
 
-* If you use GPL-2.0 licensed code or binaries, you **must open source all your code**.
-* If you only use MPL-2.0 licensed components, you only need to open source your modified parts.
-
-#### About Open Source and Commercial Use
-
-* Open source ≠ unrestricted use, and ≠ prohibition of commercial use.
-* Open-source software **can** be commercialized — but only if you follow the license terms.
-* Commercial products can be open-source (e.g., Red Hat).
-* Misuse of open-source software can lead to legal issues — see examples like OpenWRT-related infringements in China.
-
-#### About JS Scripts Developed by Others Running on This Platform
-
-* That’s your freedom — these scripts are **not** subject to this license, similar to running software on Linux.
-
-#### Can This Product or Auto.js Be Used Commercially?
-
-* Whether this product can be used commercially depends on Auto.js, since many features and code copyrights belong to Auto.js.
-* Whether Auto.js itself can be used commercially depends on your interpretation of its “**Non-commercial use**” clause and its legal validity.
-* This project itself will **not** use Auto.js commercially.
-
-### Build Instructions:
-Environment requirement: `jdk` version 17 or higher
-
-All commands are executed in the project root directory.  
-If you are using Windows PowerShell < 7.0, use the version of commands with “;” instead of “&&”.
-
-##### Install Debug Version on Device Locally:
-```shell
-./gradlew app:buildDebugTemplateApp && ./gradlew app:assembleV6Debug && ./gradlew app:installV6Debug
-# or
-./gradlew app:buildDebugTemplateApp ; ./gradlew app:assembleV6Debug ; ./gradlew app:installV6Debug
-```
-The debug APK will be generated at `app/build/outputs/apk/v6/debug` with the default signature.
-
-##### Build Release Version Locally:
-```shell
-./gradlew app:buildTemplateApp && ./gradlew inrt:cp2APP && ./gradlew app:assembleV6
-# or
-./gradlew app:buildTemplateApp ; ./gradlew inrt:cp2APP ; ./gradlew app:assembleV6
-```
-The unsigned release APK will be located at `app/build/outputs/apk/v6/release` and must be signed before installation.
-
-##### Run Debug Version in Android Studio:
-First, run:
-```shell
-./gradlew app:buildDebugTemplateApp
-```
-Then click the **Run** button in Android Studio.
-
-##### Build and Sign Release Version in Android Studio:
-First, run:
-```shell
-./gradlew app:buildTemplateApp
-```
-Then go to **Build → Generate Signed Bundle / APK... → Select “APK” → Next → Choose or create a keystore → Next → Select “v6Release” → Finish.**  
-The generated APK will be located in `app/v6/release`.
+        } else {
+            img.recycle();
+            if (otherSince === 0) otherSince = now;
+            var oe = now - otherSince;
+            if (oe > 3000) {
+                if (!tryAdClose() && oe > 15000 && now - lastBack > 10000) {
+                    back(); lastBack = now; log("back() (ad)");
+                }
+            }
+            if (oe > 120000) { relaunch(); otherSince = 0; }
+            sleep(800);
+        }
+    } catch (e) {
+        log("Error: " + e);
+        sleep(2000);
+    }
+}
